@@ -32,15 +32,13 @@ struct Proposal {
     is_active: bool,
     voted: Vec<candid::Principal>,
     owner: candid::Principal,
-    
 }
 
 #[derive(Debug, CandidType, Deserialize)]
 struct CreateProposal {
     description: String,
-    is_active: bool
+    is_active: bool,
 }
-
 
 impl Storable for Proposal {
     fn to_bytes(&self) -> Cow<[u8]> {
@@ -52,7 +50,7 @@ impl Storable for Proposal {
     }
 }
 
-impl BoundedStorable for Proposal{
+impl BoundedStorable for Proposal {
     const MAX_SIZE: u32 = MAX_VALUE_SIZE;
     const IS_FIXED_SIZE: bool = false;
 }
@@ -65,19 +63,121 @@ thread_local! {
 }
 
 #[ic_cdk::query]
-fn get_proposal(key: u64) -> Option<Proposal> {}
+fn get_proposal(key: u64) -> Option<Proposal> {
+    PROPOSAL_MAP.with(|p| p.borrow().get(&key))
+}
 
 #[ic_cdk::query]
-fn get_proposal_count() -> u64 {}
+fn get_proposal_count() -> u64 {
+    PROPOSAL_MAP.with(|p| p.borrow().len())
+}
 
 #[ic_cdk::update]
-fn create_proposal(key: u64, proposal: CreateProposal) -> Option<Proposal> {}
+fn create_proposal(key: u64, proposal: CreateProposal) -> Option<Proposal> {
+    let value = Proposal {
+        description: proposal.description,
+        approve: 0u32,
+        pass: 0u32,
+        reject: 0u32,
+        is_active: proposal.is_active,
+        voted: vec![],
+        owner: ic_cdk::caller(),
+    };
+
+    PROPOSAL_MAP.with(|p| p.borrow_mut().insert(key, value))
+}
 
 #[ic_cdk::update]
-fn edit_proposal(key: u64, proposal: CreateProposal) -> Result<(), VoteError> {}
+fn edit_proposal(key: u64, proposal: CreateProposal) -> Result<(), VoteError> {
+    PROPOSAL_MAP.with(|p| {
+        let old_proposal_opt = p.borrow().get(&key);
+        let old_proposal: Proposal;
+
+        match old_proposal_opt {
+            Some(value) => old_proposal = value,
+            None => return Err(VoteError::NoSuchProposal),
+        }
+
+        if old_proposal.owner != ic_cdk::caller() {
+            return Err(VoteError::AccessRejected);
+        }
+
+        let value = Proposal {
+            description: proposal.description,
+            approve: old_proposal.approve,
+            reject: old_proposal.reject,
+            pass: old_proposal.pass,
+            is_active: proposal.is_active,
+            voted: old_proposal.voted,
+            owner: old_proposal.owner,
+        };
+
+        let res = p.borrow_mut().insert(key, value);
+
+        match res {
+            Some(_) => Ok(()),
+            None => Err(VoteError::UpdateError),
+        }
+    })
+}
 
 #[ic_cdk::update]
-fn end_proposal(key: u64) -> Result<(), VoteError> {}
+fn end_proposal(key: u64) -> Result<(), VoteError> {
+    PROPOSAL_MAP.with(|p| {
+        let old_proposal_opt = p.borrow().get(&key);
+        let mut old_proposal: Proposal;
+
+        match old_proposal_opt {
+            Some(value) => old_proposal = value,
+            None => return Err(VoteError::NoSuchProposal),
+        }
+
+        if old_proposal.owner != ic_cdk::caller() {
+            return Err(VoteError::AccessRejected);
+        }
+
+        old_proposal.is_active = false;
+
+        let res = p.borrow_mut().insert(key, old_proposal);
+
+        match res {
+            Some(_) => 0k(()),
+            None => Err(VoteError::UpdateError),
+        }
+    })
+}
 
 #[ic_cdk::update]
-fn vote(key: u64, choice: Choice) -> Result<(), VoteError> {}
+fn vote(key: u64, choice: Choice) -> Result<(), VoteError> {
+    PROPOSAL_MAP.with(|p| {
+        let proposal_opt = p.borrow().get(&key);
+        let mut proposal: Proposal;
+
+        match proposal_opt {
+            Some(value) => old_proposal = value,
+            None => return Err(VoteError::NoSuchProposal),
+        }
+
+        let caller = ic_cdk::caller();
+
+        if proposal.voted.contains(&caller()) {
+            return Err(VoteError::AlreadyVoted);
+        } else if proposal.is_active != true {
+            return Err(VoteError::ProposalIsNotActive);
+        }
+
+        match choice {
+            Choice::Approve => proposal.approve += 1,
+            Choice::Pass => proposal.pass += 1,
+            Choice::Reject => proposal.reject += 1,
+        }
+
+        proposal.voted.push(caller);
+        let res;
+
+        match res {
+            Some(_) => Ok(()),
+            None => Err(VoteError::UpdateErrors),
+        }
+    })
+}
